@@ -116,20 +116,18 @@ namespace Lego.Ev3.Core
 
 		internal async Task DeleteFileAsyncInternal(string devicePath)
 		{
-			Response r = ResponseManager.CreateResponse();
-			Command c = new Command(CommandType.SystemReply);
+			Command c = _brick.NewCommand(CommandType.System);
 			c.DeleteFile(devicePath);
-			await _brick.SendCommandAsyncInternal(c);
+			var r = await _brick.SendCommandAsyncInternal(c);
 			if(r.SystemReplyStatus != SystemReplyStatus.Success)
 				throw new Exception("Error deleting file: " + r.SystemReplyStatus);
 		}
 
 		internal async Task CreateDirectoryAsyncInternal(string devicePath)
 		{
-			Response r = ResponseManager.CreateResponse();
-			Command c = new Command(CommandType.SystemReply);
+			Command c = _brick.NewCommand(CommandType.System);
 			c.CreateDirectory(devicePath);
-			await _brick.SendCommandAsyncInternal(c);
+			var r = await _brick.SendCommandAsyncInternal(c);
 			if(r.SystemReplyStatus != SystemReplyStatus.Success)
 				throw new Exception("Error creating directory: " + r.SystemReplyStatus);
 		}
@@ -140,44 +138,44 @@ namespace Lego.Ev3.Core
 			await WriteFileAsyncInternal(data, devicePath);
 		}
 
-		internal async Task WriteFileAsyncInternal(byte[] data, string devicePath)
-		{
-			const int chunkSize = 960;
+        internal async Task WriteFileAsyncInternal(byte[] data, string devicePath)
+        {
+            const int chunkSize = 960;
 
-			Command commandBegin = new Command(CommandType.SystemReply);
-			commandBegin.AddOpcode(SystemOpcode.BeginDownload);
-			commandBegin.AddRawParameter((uint)data.Length);
-			commandBegin.AddRawParameter(devicePath);
+            Command commandBegin = _brick.NewCommand(CommandType.System);
+            commandBegin.AddOpcode(SystemOpcode.BeginDownload);
+            commandBegin.AddRawParameter((uint)data.Length);
+            commandBegin.AddRawParameter(devicePath);
 
-			await _brick.SendCommandAsyncInternal(commandBegin);
-			if(commandBegin.Response.SystemReplyStatus != SystemReplyStatus.Success)
-				throw new Exception("Could not begin file save: " + commandBegin.Response.SystemReplyStatus);
+            var response = await _brick.SendCommandAsyncInternal(commandBegin);
+            if (response.SystemReplyStatus != SystemReplyStatus.Success)
+                throw new Exception("Could not begin file save: " + response.SystemReplyStatus);
 
-			byte handle = commandBegin.Response.Data[0];
-			int sizeSent = 0;
+            byte handle = response.Data[0];
+            int sizeSent = 0;
 
-			while(sizeSent < data.Length)
-			{
-				Command commandContinue = new Command(CommandType.SystemReply);
-				commandContinue.AddOpcode(SystemOpcode.ContinueDownload);
-				commandContinue.AddRawParameter(handle);
-				int sizeToSend = Math.Min(chunkSize, data.Length - sizeSent);
-				commandContinue.AddRawParameter(data, sizeSent, sizeToSend);
-				sizeSent += sizeToSend;
+            while (sizeSent < data.Length)
+            {
+                Command commandContinue = _brick.NewCommand(CommandType.System);
+                commandContinue.AddOpcode(SystemOpcode.ContinueDownload);
+                commandContinue.AddRawParameter(handle);
+                int sizeToSend = Math.Min(chunkSize, data.Length - sizeSent);
+                commandContinue.AddRawParameter(data, sizeSent, sizeToSend);
+                sizeSent += sizeToSend;
 
-				await _brick.SendCommandAsyncInternal(commandContinue);
-				if(commandContinue.Response.SystemReplyStatus != SystemReplyStatus.Success &&
-					(commandContinue.Response.SystemReplyStatus != SystemReplyStatus.EndOfFile && sizeSent == data.Length))
-					throw new Exception("Error saving file: " + commandContinue.Response.SystemReplyStatus);
-			}
+                await _brick.SendCommandAsyncInternal(commandContinue);
+                if (response.SystemReplyStatus != SystemReplyStatus.Success &&
+                    (response.SystemReplyStatus != SystemReplyStatus.EndOfFile && sizeSent == data.Length))
+                    throw new Exception("Error saving file: " + response.SystemReplyStatus);
+            }
 
-			//Command commandClose = new Command(CommandType.SystemReply);
-			//commandClose.AddOpcode(SystemOpcode.CloseFileHandle);
-			//commandClose.AddRawParameter(handle);
-			//await _brick.SendCommandAsyncInternal(commandClose);
-			//if(commandClose.Response.SystemReplyStatus != SystemReplyStatus.Success)
-			//	throw new Exception("Could not close handle: " + commandClose.Response.SystemReplyStatus);
-		}
+            //Command commandClose = _brick.NewCommand(CommandType.SystemReply);
+            //commandClose.AddOpcode(SystemOpcode.CloseFileHandle);
+            //commandClose.AddRawParameter(handle);
+            //await _brick.SendCommandAsyncInternal(commandClose);
+            //if(commandClose.Response.SystemReplyStatus != SystemReplyStatus.Success)
+            //	throw new Exception("Could not close handle: " + commandClose.Response.SystemReplyStatus);
+        }
 
 #if WINRT
 		private async Task<byte[]> GetFileContents(string localPath)

@@ -4,40 +4,52 @@ using System.Threading.Tasks;
 
 namespace Lego.Ev3.Core
 {
-	internal static class ResponseManager
+	internal class ResponseManager
 	{
-		private static ushort _nextSequence = 0x0001;
-		internal static readonly Dictionary<int, Response> Responses = new Dictionary<int, Response>();
+        private object _lockObj = new object();
+        private ushort _nextSequence = 0x0001;
+        private readonly Dictionary<int, TaskCompletionSource<Response>> Responses = new Dictionary<int, TaskCompletionSource<Response>>();
 
-		private static ushort GetSequenceNumber()
-		{
-			if(_nextSequence == UInt16.MaxValue)
-				_nextSequence++;
+        private ushort GetSequenceNumber()
+        {
+            if (_nextSequence == UInt16.MaxValue)
+                _nextSequence++;
 
-			return _nextSequence++;
-		}
+            return _nextSequence++;
+        }
 
-		internal static Response CreateResponse()
-		{
-			ushort sequence = GetSequenceNumber();
+        internal ushort RegisterSequenceNumber()
+        {
+            lock (_lockObj)
+            {
+                ushort sequence = GetSequenceNumber();
+                Responses.Add(sequence, new TaskCompletionSource<Core.Response>());
+                return sequence;
+            }
+        }
 
-			Response r = new Response(sequence);
-			Responses[sequence] = r;
-			return r;
-		}
+        internal async Task<Response> WaitForResponseAsync(ushort sequnceNo)
+        {
+            TaskCompletionSource<Response> waiter;
 
-		internal static async Task WaitForResponseAsync(Response r)
-		{
-			await Task.Run(() =>
-			{
-				if(r.Event.WaitOne(1000))
-					Responses.Remove(r.Sequence);
-				else
-					r.ReplyType = ReplyType.DirectReplyError;
-			});
-		}
+            lock (_lockObj)
+            {
+                if (!Responses.TryGetValue(sequnceNo, out waiter))
+                    throw new ArgumentException("Sequence number " + sequnceNo + " is not registered!");
+            }
 
-		internal static void HandleResponse(byte[] report)
+            await Task.WhenAny(waiter.Task, Task.Delay(10000));
+
+            lock (_lockObj)
+            {
+                if (!waiter.Task.IsCompleted)
+                    return new Response(sequnceNo) { ReplyType = ReplyType.DirectReplyError };
+                else
+                    return waiter.Task.Result;
+            }
+        }
+
+		internal void HandleResponse(byte[] report)
 		{
 			if (report == null || report.Length < 3)
 				return;
@@ -49,7 +61,7 @@ namespace Lego.Ev3.Core
 
 			if (sequence > 0)
 			{
-				Response r = Responses[sequence];
+                Response r = new Response(sequence);
 
 				if (Enum.IsDefined(typeof (ReplyType), replyType))
 					r.ReplyType = (ReplyType) replyType;
@@ -71,7 +83,10 @@ namespace Lego.Ev3.Core
 					Array.Copy(report, 5, r.Data, 0, report.Length - 5);
 				}
 
-				r.Event.Set();
+                TaskCompletionSource<Response> waitSrc;
+                lock (_lockObj) Responses.TryGetValue(sequence, out waitSrc);
+                if (waitSrc != null)
+                    waitSrc.SetResult(r);
 			}
 		}
 	}
