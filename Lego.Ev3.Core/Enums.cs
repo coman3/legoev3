@@ -111,20 +111,12 @@ namespace Lego.Ev3.Core
 		/// <summary>
 		/// Direct command with a reply expected
 		/// </summary>
-		DirectReply = 0x00,
-		/// <summary>
-		/// Direct command with no reply
-		/// </summary>
-		DirectNoReply = 0x80,
+		Direct,
 
 		/// <summary>
 		///  System command with a reply expected
 		/// </summary>
-		SystemReply = 0x01,
-		/// <summary>
-		/// System command with no reply
-		/// </summary>
-		SystemNoReply = 0x81
+		System,
 	}
 
 	/// <summary>

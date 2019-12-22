@@ -148,20 +148,23 @@ namespace Lego.Ev3.Tester.Wpf
 
 		private async void BatchNoReply_Click(object sender, RoutedEventArgs e)
 		{
-			_brick.BatchCommand.PlayTone(2, 1000, 400);
-			_brick.BatchCommand.DrawCircle(Color.Foreground, 20, 20, 20, true);
-			_brick.BatchCommand.UpdateUI();
-			await _brick.BatchCommand.SendCommandAsync();
+            var batchCmd = _brick.CreateBatchCommand();
+
+            batchCmd.PlayTone(2, 1000, 400);
+            batchCmd.DrawCircle(Color.Foreground, 20, 20, 20, true);
+            batchCmd.UpdateUI();
+            await _brick.ExecuteBatch(batchCmd);
 		}
 
 		private async void BatchReply_Click(object sender, RoutedEventArgs e)
 		{
-			_brick.BatchCommand.Initialize(CommandType.DirectReply, 0x10, 0);
-			_brick.BatchCommand.PlayTone(2, 1000, 400);
-			_brick.BatchCommand.DrawCircle(Color.Foreground, 20, 20, 20, true);
-			_brick.BatchCommand.UpdateUI();
-			_brick.BatchCommand.ReadySI(InputPort.One, 0, 0);
-			byte[] b = await _brick.BatchCommand.SendCommandAsync();
+            var batchCmd = _brick.CreateBatchCommand();
+
+            batchCmd.PlayTone(2, 1000, 400);
+            batchCmd.DrawCircle(Color.Foreground, 20, 20, 20, true);
+            batchCmd.UpdateUI();
+            batchCmd.ReadySI(InputPort.One, 0, 0);
+			byte[] b = await _brick.ExecuteBatch(batchCmd);
 			Output.Text = BitConverter.ToString(b);
 		}
 	}

@@ -31,12 +31,12 @@ namespace Lego.Ev3.Core
 		public ushort TopLineHeight { get { return 10; } }
 
 		private readonly SynchronizationContext _context = SynchronizationContext.Current;
+        private ResponseManager _respManager = new ResponseManager();
 		private readonly ICommunication _comm;
 		private CancellationTokenSource _tokenSource;
 		private readonly bool _alwaysSendEvents;
 		private readonly DirectCommand _directCommand;
 		private readonly SystemCommand _systemCommand;
-		private readonly Command _batchCommand;
 
 		/// <summary>
 		/// Input and output ports on LEGO EV3 brick
@@ -59,11 +59,6 @@ namespace Lego.Ev3.Core
 		public SystemCommand SystemCommand { get { return _systemCommand; } }
 
 		/// <summary>
-		/// Send a batch command of multiple direct commands at once.  Call the <see cref="Command.Initialize"/> method with the proper <see cref="CommandType"/> to set the type of command the batch should be executed as.
-		/// </summary>
-		public Command BatchCommand { get { return _batchCommand; } }
-
-		/// <summary>
 		/// Event that is fired when a port is changed
 		/// </summary>
 		public event EventHandler<BrickChangedEventArgs> BrickChanged;
@@ -83,7 +78,6 @@ namespace Lego.Ev3.Core
 		{
 			_directCommand = new DirectCommand(this);
 			_systemCommand = new SystemCommand(this);
-			_batchCommand = new Command(this);
 
 			Buttons = new BrickButtons();
 
@@ -146,28 +140,34 @@ namespace Lego.Ev3.Core
 			;
 		}
 
-		private async Task ConnectAsyncInternal(TimeSpan pollingTime)
-		{
-			_tokenSource = new CancellationTokenSource();
+        public async Task<byte[]> ExecuteBatch(Command c)
+        {
+            var responce = await SendCommandAsyncInternal(c);
+            return responce.Data;
+        }
 
-			await _comm.ConnectAsync();
+        private async Task ConnectAsyncInternal(TimeSpan pollingTime)
+        {
+            _tokenSource = new CancellationTokenSource();
 
-			await _directCommand.StopMotorAsync(OutputPort.All, false);
+            await _comm.ConnectAsync();
 
-			if(pollingTime != TimeSpan.Zero)
-			{
-				Task t = Task.Factory.StartNew(async () =>
-				{
-					while(!_tokenSource.IsCancellationRequested)
-					{
-						await PollSensorsAsync();
-						await Task.Delay(pollingTime, _tokenSource.Token);
-					}
+            await _directCommand.StopMotorAsync(OutputPort.All, false);
 
-					await _directCommand.StopMotorAsync(OutputPort.All, false);
-				}, _tokenSource.Token, TaskCreationOptions.LongRunning, TaskScheduler.Current);
-			}
-		}
+            if (pollingTime != TimeSpan.Zero)
+            {
+                Task t = Task.Factory.StartNew(async () =>
+                {
+                    while (!_tokenSource.IsCancellationRequested)
+                    {
+                        await PollSensorsAsync();
+                        await Task.Delay(pollingTime, _tokenSource.Token);
+                    }
+
+                    await _directCommand.StopMotorAsync(OutputPort.All, false);
+                }, _tokenSource.Token, TaskCreationOptions.LongRunning, TaskScheduler.Current);
+            }
+        }
 
 		/// <summary>
 		/// Disconnect from the EV3 brick
@@ -182,23 +182,32 @@ namespace Lego.Ev3.Core
 
 		private void ReportReceived(object sender, ReportReceivedEventArgs e)
 		{
-			ResponseManager.HandleResponse(e.Report);
+            _respManager.HandleResponse(e.Report);
 		}
 
-		internal async Task SendCommandAsyncInternal(Command c)
-		{
-			await _comm.WriteAsync(c.ToBytes());
-			if(c.CommandType == CommandType.DirectReply || c.CommandType == CommandType.SystemReply)
-				await ResponseManager.WaitForResponseAsync(c.Response);
-		}
+        internal async Task<Response> SendCommandAsyncInternal(Command c)
+        {
+            await _comm.WriteAsync(c.ToBytes());
+            return await _respManager.WaitForResponseAsync(c.SequnceNo);
+        }
 
-		private async Task PollSensorsAsync()
+        internal Command NewCommand(CommandType commandType, ushort globalSize = 0, int localSize = 0)
+        {
+            return new Command(commandType, _respManager.RegisterSequenceNumber(), globalSize, localSize);
+        }
+
+        public Command CreateBatchCommand()
+        {
+            return NewCommand(CommandType.Direct);
+        }
+
+        private async Task PollSensorsAsync()
 		{
 			bool changed = false;
 			const int responseSize = 11;
 			int index = 0;
 
-			Command c = new Command(CommandType.DirectReply, (8 * responseSize) + 6, 0);
+			Command c = NewCommand(CommandType.Direct, (8 * responseSize) + 6, 0);
 
 			foreach(InputPort i in Enum.GetValues(typeof(InputPort)))
 			{
@@ -220,19 +229,19 @@ namespace Lego.Ev3.Core
 			c.IsBrickButtonPressed(BrickButton.Down,  (byte)(index+4));
 			c.IsBrickButtonPressed(BrickButton.Enter, (byte)(index+5));
 
-			await SendCommandAsyncInternal(c);
-			if(c.Response.Data == null)
+			var response = await SendCommandAsyncInternal(c);
+			if(response.Data == null)
 				return;
 
 			foreach(InputPort i in Enum.GetValues(typeof(InputPort)))
 			{
 				Port p = Ports[i];
 
-				int type = c.Response.Data[(p.Index * responseSize)+0];
-				byte mode = c.Response.Data[(p.Index * responseSize)+1];
-				float siValue = BitConverter.ToSingle(c.Response.Data, (p.Index * responseSize)+2);
-				int rawValue = BitConverter.ToInt32(c.Response.Data, (p.Index * responseSize)+6);
-				byte percentValue = c.Response.Data[(p.Index * responseSize)+10];
+				int type = response.Data[(p.Index * responseSize)+0];
+				byte mode = response.Data[(p.Index * responseSize)+1];
+				float siValue = BitConverter.ToSingle(response.Data, (p.Index * responseSize)+2);
+				int rawValue = BitConverter.ToInt32(response.Data, (p.Index * responseSize)+6);
+				byte percentValue = response.Data[(p.Index * responseSize)+10];
 
 				if((byte)p.Type != type || Math.Abs(p.SIValue - siValue) > 0.01f || p.RawValue != rawValue || p.PercentValue != percentValue)
 					changed = true;
@@ -247,21 +256,21 @@ namespace Lego.Ev3.Core
 				p.PercentValue = percentValue;
 			}
 
-			if(	Buttons.Back  != (c.Response.Data[index+0] == 1) ||
-				Buttons.Left  != (c.Response.Data[index+1] == 1) ||
-				Buttons.Up    != (c.Response.Data[index+2] == 1) ||
-				Buttons.Right != (c.Response.Data[index+3] == 1) ||
-				Buttons.Down  != (c.Response.Data[index+4] == 1) ||
-				Buttons.Enter != (c.Response.Data[index+5] == 1)
+			if(	Buttons.Back  != (response.Data[index+0] == 1) ||
+				Buttons.Left  != (response.Data[index+1] == 1) ||
+				Buttons.Up    != (response.Data[index+2] == 1) ||
+				Buttons.Right != (response.Data[index+3] == 1) ||
+				Buttons.Down  != (response.Data[index+4] == 1) ||
+				Buttons.Enter != (response.Data[index+5] == 1)
 			)
 				changed = true;
 
-			Buttons.Back	= (c.Response.Data[index+0] == 1);
-			Buttons.Left	= (c.Response.Data[index+1] == 1);
-			Buttons.Up		= (c.Response.Data[index+2] == 1);
-			Buttons.Right	= (c.Response.Data[index+3] == 1);
-			Buttons.Down	= (c.Response.Data[index+4] == 1);
-			Buttons.Enter	= (c.Response.Data[index+5] == 1);
+			Buttons.Back	= (response.Data[index+0] == 1);
+			Buttons.Left	= (response.Data[index+1] == 1);
+			Buttons.Up		= (response.Data[index+2] == 1);
+			Buttons.Right	= (response.Data[index+3] == 1);
+			Buttons.Down	= (response.Data[index+4] == 1);
+			Buttons.Enter	= (response.Data[index+5] == 1);
 
 			if(changed || _alwaysSendEvents)
 				OnBrickChanged(new BrickChangedEventArgs { Ports = this.Ports, Buttons = this.Buttons });
